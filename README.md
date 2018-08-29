@@ -22,7 +22,9 @@ Promise based HTTP client for the browser and node.js
 - Transform request and response data
 - Cancel requests
 - Automatic transforms for JSON data
-- Client side support for protecting against [XSRF](http://en.wikipedia.org/wiki/Cross-site_request_forgery)
+- Client side support for protecting against [XSRF]
+(http://en.wikipedia.org/wiki/Cross-site_request_forgery)
+- 美团 shark
 
 ## Browser Support
 
@@ -53,6 +55,19 @@ Using cdn:
 ```
 
 ## Example
+
+打开Shark通道
+```js
+axios.interceptors.request.use(function (config) {
+    config.timeout = 2000;
+    config.adapter = axios.sharkAdapter; //适配器换为shark
+    config.shark = true; //开启shark， 注意： 仅替换adapter并没有开启shark，需要同时打开该开关。方便通过CI等控制
+
+    return config;
+}, function (error) {
+    return Promise.reject(error);
+});
+```
 
 Performing a `GET` request
 
