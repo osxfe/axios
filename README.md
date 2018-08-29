@@ -10,6 +10,9 @@
 
 Promise based HTTP client for the browser and node.js
 
+**支持Shark**
+
+
 ## Features
 
 - Make [XMLHttpRequests](https://developer.mozilla.org/en-US/docs/Web/API/XMLHttpRequest) from the browser
@@ -231,6 +234,9 @@ These are the available config options for making requests. Only the `url` is re
 
   // `method` is the request method to be used when making the request
   method: 'get', // default
+
+  // `shark` is the switch for Meituan Shark Platform. `shark` 是美团Shark服务的开关，默认不打开
+  shark: false, // default
 
   // `baseURL` will be prepended to `url` unless `url` is absolute.
   // It can be convenient to set `baseURL` for an instance of axios to pass relative URLs

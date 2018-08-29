@@ -1,4 +1,3 @@
-/* axios v0.19.0-beta.1 | (c) 2018 by Matt Zabriskie */
 (function webpackUniversalModuleDefinition(root, factory) {
 	if(typeof exports === 'object' && typeof module === 'object')
 		module.exports = factory();
@@ -109,6 +108,9 @@ return /******/ (function(modules) { // webpackBootstrap
 	  return Promise.all(promises);
 	};
 	axios.spread = __webpack_require__(25);
+	
+	// Expose shark adapter
+	axios.sharkAdapter = __webpack_require__(26);
 	
 	module.exports = axios;
 	
@@ -431,6 +433,81 @@ return /******/ (function(modules) { // webpackBootstrap
 	  return a;
 	}
 	
+	/**
+	 * compare version string
+	 *
+	 * @param {String} v1
+	 * @param {String} v2
+	 * @returns {Integer}
+	 */
+	function compareVersion(v1, v2) {
+	  var lintVersion = function(v) {
+	    return typeof v === 'string' && /^(\d+\.)*[\w-]+$/.test(v);
+	  };
+	
+	  if (!(lintVersion(v1) && lintVersion(v2))) {
+	    throw new Error('illegal version');
+	  }
+	  var vs1 = v1.split('.');
+	  var vs2 = v2.split('.');
+	  var times = Math.max(vs1.length, vs2.length);
+	  for (var i = 0; i < times; i += 1) {
+	    var n1 = vs1[i] ? Number(vs1[i]) : 0;
+	    var n2 = vs2[i] ? Number(vs2[i]) : 0;
+	    if (n1 > n2) return 1;
+	    if (n1 < n2) return -1;
+	  }
+	  return 0;
+	}
+	
+	/**
+	 * get TitansX version
+	 *
+	 * @returns {String}
+	 */
+	function getTitansXVersion() {
+	  var matches = navigator.userAgent.toLowerCase().match(/titans(no)?x\/(\S+)/i);
+	  return matches ? matches[2] : undefined;
+	}
+	
+	
+	/**
+	 * get local server port
+	 *
+	 * @returns {*}
+	 */
+	function getLocalServerPort() {
+	  if (window.getWebViewState) {
+	    // Axios build flow do not support better syntax
+	    // const {
+	    //     proxy: {
+	    //         port
+	    //     } = {}
+	    // } = window.getWebViewState();
+	
+	    return ((window.getWebViewState() || {}).proxy || {}).port;
+	  }
+	  return null;
+	}
+	
+	/**
+	 * Determine if useragent is WKWebview
+	 *
+	 * @returns {boolean} true if useragent is WKWebview, otherwise false
+	 */
+	function isWKWebView() {
+	  return (/wkwebview/i).test(navigator.userAgent.toLowerCase());
+	}
+	
+	/**
+	 * Determine if useragent is android
+	 *
+	 * @returns {boolean} true if useragent is android, otherwise false
+	 */
+	function isAndroid() {
+	  return (/android/).test(navigator.userAgent.toLowerCase());
+	}
+	
 	module.exports = {
 	  isArray: isArray,
 	  isArrayBuffer: isArrayBuffer,
@@ -452,7 +529,12 @@ return /******/ (function(modules) { // webpackBootstrap
 	  merge: merge,
 	  deepMerge: deepMerge,
 	  extend: extend,
-	  trim: trim
+	  trim: trim,
+	  compareVersion: compareVersion,
+	  getTitansXVersion: getTitansXVersion,
+	  getLocalServerPort: getLocalServerPort,
+	  isWKWebView: isWKWebView,
+	  isAndroid: isAndroid
 	};
 
 
@@ -1219,8 +1301,11 @@ return /******/ (function(modules) { // webpackBootstrap
 	  if (code) {
 	    error.code = code;
 	  }
+	
 	  error.request = request;
 	  error.response = response;
+	  error.isAxiosError = true;
+	
 	  error.toJSON = function() {
 	    return {
 	      // Standard
@@ -1650,6 +1735,231 @@ return /******/ (function(modules) { // webpackBootstrap
 	  return function wrap(arr) {
 	    return callback.apply(null, arr);
 	  };
+	};
+
+
+/***/ }),
+/* 26 */
+/***/ (function(module, exports, __webpack_require__) {
+
+	'use strict';
+	
+	var utils = __webpack_require__(2);
+	var settle = __webpack_require__(14);
+	var buildURL = __webpack_require__(6);
+	var parseHeaders = __webpack_require__(17);
+	var isURLSameOrigin = __webpack_require__(18);
+	var buildAbsoluteURL = __webpack_require__(27);
+	var createError = __webpack_require__(15);
+	
+	var titansxVersion = utils.getTitansXVersion();
+	var isWKWebView = utils.isWKWebView();
+	var isAndroid = utils.isAndroid();
+	var localServerPort = utils.getLocalServerPort();
+	
+	module.exports = function xhrAdapter(config) {
+	  return new Promise(function dispatchXhrRequest(resolve, reject) {
+	    var requestData = config.data;
+	    var requestHeaders = config.headers;
+	
+	    if (utils.isFormData(requestData)) {
+	      delete requestHeaders['Content-Type']; // Let the browser set it
+	    }
+	
+	    var request = new XMLHttpRequest();
+	
+	    // HTTP basic authentication
+	    if (config.auth) {
+	      var username = config.auth.username || '';
+	      var password = config.auth.password || '';
+	      requestHeaders.Authorization = 'Basic ' + btoa(username + ':' + password);
+	    }
+	
+	    // Rewrite request for Meituan Shark Platform
+	    var url = buildURL(config.url, config.params, config.paramsSerializer);
+	    var method = config.method.toUpperCase();
+	
+	    if (config.shark) {
+	      if (isAndroid && method === 'POST' && requestData) {
+	        config.headers['X-TitansX-Body'] = requestData; // 不管body是json还是form，直接透传
+	      }
+	
+	      if (!isWKWebView) {
+	        url += (config.url.indexOf('?') > -1 ? '&' : '?') + 'shark=1';
+	      } else if (utils.compareVersion(titansxVersion, '11.9.0') >= 0 ) {
+	        if (localServerPort >= 57800 && (method === 'GET' || method === 'POST')) {
+	          config.withCredentials = true;
+	
+	          if (!(/^https?:\/\//).test(url)) {
+	            url = buildAbsoluteURL(url);
+	          }
+	          url = 'http://localhost:' + localServerPort + '/shark?url=' + encodeURIComponent(url);
+	        }
+	      }
+	    }
+	
+	    request.open(method, url, true);
+	
+	    // Set the request timeout in MS
+	    request.timeout = config.timeout;
+	
+	    // Listen for ready state
+	    request.onreadystatechange = function handleLoad() {
+	      if (!request || request.readyState !== 4) {
+	        return;
+	      }
+	
+	      // The request errored out and we didn't get a response, this will be
+	      // handled by onerror instead
+	      // With one exception: request that using file: protocol, most browsers
+	      // will return status as 0 even though it's a successful request
+	      if (request.status === 0 && !(request.responseURL && request.responseURL.indexOf('file:') === 0)) {
+	        return;
+	      }
+	
+	      // Prepare the response
+	      var responseHeaders = 'getAllResponseHeaders' in request ? parseHeaders(request.getAllResponseHeaders()) : null;
+	      var responseData = !config.responseType || config.responseType === 'text' ? request.responseText : request.response;
+	      var response = {
+	        data: responseData,
+	        status: request.status,
+	        statusText: request.statusText,
+	        headers: responseHeaders,
+	        config: config,
+	        request: request
+	      };
+	
+	      settle(resolve, reject, response);
+	
+	      // Clean up request
+	      request = null;
+	    };
+	
+	    // Handle browser request cancellation (as opposed to a manual cancellation)
+	    request.onabort = function handleAbort() {
+	      if (!request) {
+	        return;
+	      }
+	
+	      reject(createError('Request aborted', config, 'ECONNABORTED', request));
+	
+	      // Clean up request
+	      request = null;
+	    };
+	
+	    // Handle low level network errors
+	    request.onerror = function handleError() {
+	      // Real errors are hidden from us by the browser
+	      // onerror should only fire if it's a network error
+	      reject(createError('Network Error', config, null, request));
+	
+	      // Clean up request
+	      request = null;
+	    };
+	
+	    // Handle timeout
+	    request.ontimeout = function handleTimeout() {
+	      reject(createError('timeout of ' + config.timeout + 'ms exceeded', config, 'ECONNABORTED',
+	        request));
+	
+	      // Clean up request
+	      request = null;
+	    };
+	
+	    // Add xsrf header
+	    // This is only done if running in a standard browser environment.
+	    // Specifically not if we're in a web worker, or react-native.
+	    if (utils.isStandardBrowserEnv()) {
+	      var cookies = __webpack_require__(19);
+	
+	      // Add xsrf header
+	      var xsrfValue = (config.withCredentials || isURLSameOrigin(config.url)) && config.xsrfCookieName ?
+	        cookies.read(config.xsrfCookieName) :
+	        undefined;
+	
+	      if (xsrfValue) {
+	        requestHeaders[config.xsrfHeaderName] = xsrfValue;
+	      }
+	    }
+	
+	    // Add headers to the request
+	    if ('setRequestHeader' in request) {
+	      utils.forEach(requestHeaders, function setRequestHeader(val, key) {
+	        if (typeof requestData === 'undefined' && key.toLowerCase() === 'content-type') {
+	          // Remove Content-Type if data is undefined
+	          delete requestHeaders[key];
+	        } else {
+	          // Otherwise add header to the request
+	          request.setRequestHeader(key, val);
+	        }
+	      });
+	    }
+	
+	    // Add withCredentials to request if needed
+	    if (config.withCredentials) {
+	      request.withCredentials = true;
+	    }
+	
+	    // Add responseType to request if needed
+	    if (config.responseType) {
+	      try {
+	        request.responseType = config.responseType;
+	      } catch (e) {
+	        // Expected DOMException thrown by browsers not compatible XMLHttpRequest Level 2.
+	        // But, this can be suppressed for 'json' type as it can be parsed by default 'transformResponse' function.
+	        if (config.responseType !== 'json') {
+	          throw e;
+	        }
+	      }
+	    }
+	
+	    // Handle progress if needed
+	    if (typeof config.onDownloadProgress === 'function') {
+	      request.addEventListener('progress', config.onDownloadProgress);
+	    }
+	
+	    // Not all browsers support upload events
+	    if (typeof config.onUploadProgress === 'function' && request.upload) {
+	      request.upload.addEventListener('progress', config.onUploadProgress);
+	    }
+	
+	    if (config.cancelToken) {
+	      // Handle cancellation
+	      config.cancelToken.promise.then(function onCanceled(cancel) {
+	        if (!request) {
+	          return;
+	        }
+	
+	        request.abort();
+	        reject(cancel);
+	        // Clean up request
+	        request = null;
+	      });
+	    }
+	
+	    if (requestData === undefined) {
+	      requestData = null;
+	    }
+	
+	    // Send the request
+	    request.send(requestData);
+	  });
+	};
+
+
+/***/ }),
+/* 27 */
+/***/ (function(module, exports) {
+
+	'use strict';
+	
+	/**
+	 * Build a URL by transform relative url to absolute one
+	 */
+	module.exports = function buildAbsolutePath(href) {
+	  var link = document.createElement('a');
+	  link.href = href;
+	  return link.href;
 	};
 
 
